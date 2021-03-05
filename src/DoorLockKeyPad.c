@@ -1480,7 +1480,7 @@ static bool ValidateUserCode( uint8_t identifier, uint8_t const * const pCode, u
   Ecode_t errCode = nvm3_readData(pFileSystemApplication, ZAF_FILE_ID_USERCODE, userCodeData, ZAF_FILE_SIZE_USERCODE);
   ASSERT(ECODE_NVM3_OK == errCode); //Assert has been kept for debugging,this can be removed from the production code as it is hard to fail in read when a corressponding write is successfull
 
-  if( (len == userCodeData[identifier - 1].userCodeLen) && ((USER_ID_OCCUPIED == userCodeData[identifier - 1].user_id_status) || (USER_ID_RESERVED == userCodeData[identifier - 1].user_id_status)))
+  if( (len == userCodeData[identifier - 1].userCodeLen) && ((USER_ID_OCCUPIED == userCodeData[identifier - 1].user_id_status) || (USER_ID_PASSAGE_MODE == userCodeData[identifier - 1].user_id_status)))
   {
     if(0 == memcmp(pCode, userCodeData[identifier - 1].userCode, len))
     {
@@ -1490,18 +1490,49 @@ static bool ValidateUserCode( uint8_t identifier, uint8_t const * const pCode, u
   return false;
 }
 
+static void printUserCode(const char* preffix, uint16_t id, uint8_t status, const uint8_t* userCode, uint8_t len)
+{
+  DPRINTF("\r\n%s, id=%u, status=%d, code=", preffix, id, status);
+  for(uint8_t i = 0; i < len; ++i){
+    DPRINTF("%c", userCode[i]);
+  }
+  DPRINT("\r\n");
+}
+
+static void printMasterCode(const char* preffix, const uint8_t* userCode, uint8_t len)
+{
+  DPRINTF("%s, code=", preffix);
+  for(uint8_t i = 0; i < len; ++i){
+    DPRINTF("%c", userCode[i]);
+  }
+  DPRINT("\r\n");
+}
+
 /**
  * @brief See description for function prototype in CC_UserCode.h
  */
 e_cmd_handler_return_code_t
 CC_UserCode_Set_handler(
   uint8_t identifier,
-  USER_ID_STATUS id,
+  USER_ID_STATUS status,
   uint8_t* pUserCode,
   uint8_t len,
   uint8_t endpoint )
 {
-  uint8_t i;
+  const uint8_t supportedStatuses[] = SUPPORTED_STATUSES;
+  if ( (supportedStatuses[0] & ( 1 << status )) == 0 )
+  {
+      DPRINTF("Not supported status %d\r\n", status);
+      return E_CMD_HANDLER_RETURN_CODE_HANDLED;
+  }
+
+  if (!isUserCodeValid(pUserCode, len, status == USER_ID_AVAILBLE))
+  {
+      DPRINT("Invalid user code\r\n");
+      return E_CMD_HANDLER_RETURN_CODE_HANDLED;
+  }
+
+
   UNUSED(endpoint);
   SUserCode userCodeData[USER_ID_MAX];
 
@@ -1510,31 +1541,38 @@ CC_UserCode_Set_handler(
 
   if(0 == identifier)
   {
-    if(USER_ID_AVAILBLE == id) // it is possible to remove all user codes at once when 0 == identifier
+    if(USER_ID_AVAILBLE == status) // it is possible to remove all user codes at once when 0 == identifier
     {
-      for(i = 0; i < USER_ID_MAX; i++)
+      for(uint8_t i = 0; i < USER_ID_MAX; i++)
       {
-        userCodeData[i].user_id_status = id;
-        memset(userCodeData[i].userCode, 0xFF, len);
-        userCodeData[i].userCodeLen = len;
+        userCodeData[i].user_id_status = status;
+        memset(userCodeData[i].userCode, 0, USERCODE_MAX_LEN);
+        userCodeData[i].userCodeLen = 0;
       }
     }
   }
   else
   {
-    userCodeData[identifier - 1].user_id_status = id;
-    memcpy(userCodeData[identifier - 1].userCode, pUserCode, len);
-    userCodeData[identifier - 1].userCodeLen = len;
+    userCodeData[identifier - 1].user_id_status = status;
+
+    if (USER_ID_AVAILBLE == status)
+    {
+        memset(userCodeData[identifier - 1].userCode, 0, USERCODE_MAX_LEN);
+        userCodeData[identifier - 1].userCodeLen = 0;
+    }
+    else
+    {
+        memcpy(userCodeData[identifier - 1].userCode, pUserCode, len);
+        memset(userCodeData[identifier - 1].userCode, 0, USERCODE_MAX_LEN - len);
+        userCodeData[identifier - 1].userCodeLen = len;
+    }
+
+    printUserCode("set user code", identifier, status, userCodeData[identifier - 1].userCode, userCodeData[identifier - 1].userCodeLen);
   }
 
   errCode = nvm3_writeData(pFileSystemApplication, ZAF_FILE_ID_USERCODE, userCodeData, ZAF_FILE_SIZE_USERCODE);
   ASSERT(ECODE_NVM3_OK == errCode); //Assert has been kept for debugging if we are able to write then certainly some failure in flash hardware/driver, can be removed from production build
 
-  for(i = 0; i < len; i++)
-  {
-    DPRINTF("%d",*(pUserCode+i));
-  }
-  DPRINT("\r\n");
   return E_CMD_HANDLER_RETURN_CODE_HANDLED;
 }
 
@@ -1557,6 +1595,8 @@ CC_UserCode_getId_handler(
   return true;
 }
 
+
+
 /**
  * @brief See description for function prototype in CC_UserCode.h
  */
@@ -1565,9 +1605,9 @@ CC_UserCode_Report_handler(
   uint8_t identifier,
   uint8_t* pUserCode,
   uint8_t* pLen,
+  uint8_t* status,
   uint8_t endpoint)
 {
-  uint8_t i;
   SUserCode userCodeData[USER_ID_MAX];
   UNUSED(endpoint);
 
@@ -1575,30 +1615,277 @@ CC_UserCode_Report_handler(
   ASSERT(ECODE_NVM3_OK == errCode); //Assert has been kept for debugging , Read is difficult to fail when a write has a failure can be removed from production code if this error can only be caused by some internal flash failure
 
   *pLen = userCodeData[identifier - 1].userCodeLen;
-  if(USERCODE_MAX_LEN >= *pLen)
-  {
-    memcpy(pUserCode, userCodeData[identifier - 1].userCode, *pLen);
+  *status = userCodeData[identifier - 1].user_id_status;
+  memcpy(pUserCode, userCodeData[identifier - 1].userCode, *pLen);
 
-    DPRINT("hCmdUC_Report = ");
-    for(i = 0; i < *pLen; i++){
-      DPRINTF("%d", *(pUserCode+i));
-    }
-    DPRINT("\r\n");
-    return true;
-  }
-  return false;
+  printUserCode("UC report", identifier, *status, pUserCode, *pLen);
+
+  return true;
 }
 
 /**
  * @brief See description for function prototype in CC_UserCode.h
  */
-uint8_t
-CC_UserCode_UsersNumberReport_handler(uint8_t endpoint)
+uint16_t CC_UserCode_UsersNumberReport_handler()
 {
-  UNUSED(endpoint);
   return USER_ID_MAX;
 }
 
+KEYPAD_MODE CC_UserCode_KeypadModeReport_handler( )
+{
+  SUserCodeInfo info;
+  Ecode_t errCode = nvm3_readData(pFileSystemApplication, ZAF_FILE_ID_USERCODE_INFO, &info, sizeof(SUserCodeInfo));
+  ASSERT(ECODE_NVM3_OK == errCode); //Assert has been kept for debugging,this can be removed from the production code as it is hard to fail in read when a corressponding write is successfull
+
+  DPRINTF("report keypad mode %u\r\n", info.keyPadMode);
+
+  return info.keyPadMode;
+}
+
+e_cmd_handler_return_code_t CC_UserCode_KeypadModeSet_handler( KEYPAD_MODE mode )
+{
+  SUserCodeInfo info;
+  Ecode_t errCode = nvm3_readData(pFileSystemApplication, ZAF_FILE_ID_USERCODE_INFO, &info, sizeof(SUserCodeInfo));
+  ASSERT(ECODE_NVM3_OK == errCode);
+
+  info.keyPadMode = mode;
+
+  errCode = nvm3_writeData(pFileSystemApplication, ZAF_FILE_ID_USERCODE_INFO, &info, sizeof(SUserCodeInfo));
+  ASSERT(ECODE_NVM3_OK == errCode);
+
+  DPRINTF("set keypad mode %u\r\n", info.keyPadMode);
+
+  return E_CMD_HANDLER_RETURN_CODE_HANDLED;
+}
+
+void CC_UserCode_MasterCodeReport_handler( uint8_t* code, uint8_t* length )
+{
+  SUserCodeInfo info;
+  Ecode_t errCode = nvm3_readData(pFileSystemApplication, ZAF_FILE_ID_USERCODE_INFO, &info, sizeof(SUserCodeInfo));
+  ASSERT(ECODE_NVM3_OK == errCode);
+
+  *length = info.masterCodeLength;
+  memcpy(code, info.masterCode, *length);
+
+  printMasterCode("report MC", info.masterCode, info.masterCodeLength);
+}
+
+e_cmd_handler_return_code_t CC_UserCode_MasterCodeSet_handler( const uint8_t* code, uint8_t length )
+{
+  SUserCodeInfo info;
+  Ecode_t errCode = nvm3_readData(pFileSystemApplication, ZAF_FILE_ID_USERCODE_INFO, &info, sizeof(SUserCodeInfo));
+  ASSERT(ECODE_NVM3_OK == errCode);
+
+  if ( isUserCodeValid(code, length, MASTER_CODE_DEACTIVATION_SUPPORTED) ) {
+    info.masterCodeLength = length;
+    memcpy(info.masterCode, code, length);
+    memset(info.masterCode + length, 0, USERCODE_MAX_LEN - length);
+
+    printMasterCode("set MC", info.masterCode, info.masterCodeLength);
+
+    errCode = nvm3_writeData(pFileSystemApplication, ZAF_FILE_ID_USERCODE_INFO, &info, sizeof(SUserCodeInfo));
+    ASSERT(ECODE_NVM3_OK == errCode);
+
+    return E_CMD_HANDLER_RETURN_CODE_HANDLED;
+  }
+  else
+  {
+      DPRINT("Master code is invalid\r\n");
+  }
+
+  return E_CMD_HANDLER_RETURN_CODE_FAIL;
+}
+
+e_cmd_handler_return_code_t
+CC_UserCode_ExtendedSet_handler(
+  const uint8_t* userCodesData,
+  uint16_t dataLen)
+{
+  SUserCode userCodeData[USER_ID_MAX];
+
+  Ecode_t errCode = nvm3_readData(pFileSystemApplication, ZAF_FILE_ID_USERCODE, userCodeData, ZAF_FILE_SIZE_USERCODE);
+  ASSERT(ECODE_NVM3_OK == errCode); //Assert has been kept for debugging,this can be removed from the production code as it is hard to fail in read when a corressponding write is successfull
+
+  const uint8_t* userCodesDataEnd = userCodesData + dataLen;
+  const uint8_t userCodesCount = userCodesData[0];
+  ++userCodesData;
+
+  const uint8_t supportedStatuses[] = SUPPORTED_STATUSES;
+  for (uint8_t ucIndex = 0; userCodesData < userCodesDataEnd && ucIndex < userCodesCount; ++ucIndex) {
+      const uint16_t id = ( userCodesData[0] << 8 ) | userCodesData[1];
+      const uint8_t status = userCodesData[2];
+      const uint8_t len = userCodesData[3] & 0x0F;
+
+      if (id == 0) {
+          if (status == USER_ID_AVAILBLE)
+          {
+              for(uint16_t i = 0; i < USER_ID_MAX; i++)
+              {
+                userCodeData[i].user_id_status = 0;
+                memset(userCodeData[i].userCode, 0, USERCODE_MAX_LEN);
+                userCodeData[i].userCodeLen = 0;
+              }
+
+              break;
+          }
+          else
+          {
+              DPRINT("Invalid status for setting all codes\r\n");
+          }
+      }
+      else if ( (supportedStatuses[0] & ( 1 << status )) == 0 )
+      {
+          DPRINTF("Not supported status %d\r\n", status);
+      }
+      else if ( !isUserCodeValid(userCodesData + 4, len, status == USER_ID_AVAILBLE) )
+      {
+          DPRINT("User code is invalid\r\n");
+      }
+      else if ( userCodesData + len + 4 > userCodesDataEnd )
+      {
+          DPRINT("Invalid user code data length\r\n");
+      }
+      else
+      {
+          userCodeData[id - 1].user_id_status = status;
+          userCodeData[id - 1].userCodeLen = len;
+          memcpy(userCodeData[id - 1].userCode, userCodesData + 4, len);
+          memset(userCodeData[id - 1].userCode + len, 0, USERCODE_MAX_LEN - len);
+
+          printUserCode("extended set user code", id, status, userCodeData[id - 1].userCode, userCodeData[id - 1].userCodeLen);
+      }
+
+      userCodesData += len + 4;
+  }
+
+  errCode = nvm3_writeData(pFileSystemApplication, ZAF_FILE_ID_USERCODE, userCodeData, ZAF_FILE_SIZE_USERCODE);
+  ASSERT(ECODE_NVM3_OK == errCode); //Assert has been kept for debugging if we are able to write then certainly some failure in flash hardware/driver, can be removed from production build
+
+  return E_CMD_HANDLER_RETURN_CODE_HANDLED;
+}
+
+bool CC_UserCode_ExtendedReport_handler(
+    uint16_t id,
+    uint8_t* userCodesData,
+    uint16_t* dataLen,
+    uint16_t maxDataLen,
+    bool reportMore )
+{
+  SUserCode userCodeData[USER_ID_MAX];
+
+  Ecode_t errCode = nvm3_readData(pFileSystemApplication, ZAF_FILE_ID_USERCODE, userCodeData, ZAF_FILE_SIZE_USERCODE);
+  ASSERT(ECODE_NVM3_OK == errCode); //Assert has been kept for debugging,this can be removed from the production code as it is hard to fail in read when a corressponding write is successfull
+
+  uint8_t* userCodesDataBegin = userCodesData;
+  uint8_t* userCodesCount = userCodesData;
+  *userCodesCount = 0;
+
+  const uint8_t maxUserCodesCount = reportMore ? 3 : 1;
+
+  ++userCodesData;
+
+  uint16_t firstId = id;
+  uint16_t nextId = 0;
+
+  for (; id <= USER_ID_MAX; ++id) {
+      if (id != firstId && userCodeData[id - 1].user_id_status == 0) {
+          continue;
+      }
+
+      const uint8_t len = userCodeData[id - 1].user_id_status ? (userCodeData[id - 1].userCodeLen & 0xFF) : 0;
+
+      if (*userCodesCount == maxUserCodesCount) {
+          nextId = id;
+          break;
+      }
+
+      if (userCodesData + len + 4 - userCodesCount > maxDataLen)
+      {
+          ASSERT(id != firstId);
+
+          DPRINT("CC_UserCode_ExtendedReport_handler max length exceeded\r\n");
+          nextId = id;
+          break;
+      }
+
+      userCodesData[0] = (id >> 8) & 0xFF;
+      userCodesData[1] = id & 0xFF;
+      userCodesData[2] = userCodeData[id - 1].user_id_status;
+
+      userCodesData[3] = len;
+
+      memcpy(userCodesData + 4, userCodeData[id - 1].userCode, len);
+
+      printUserCode("extended report user code", id, userCodeData[id - 1].user_id_status, userCodeData[id - 1].userCode, userCodeData[id - 1].userCodeLen);
+
+      userCodesData += len + 4;
+      ++*userCodesCount;
+  }
+
+  userCodesData[0] = nextId >> 8;
+  userCodesData[1] = nextId & 0xFF;
+  userCodesData += 2;
+
+  *dataLen = (uint16_t)(userCodesData - userCodesDataBegin);
+
+  DPRINTF("Next user id %d, data length %d\r\n", nextId, *dataLen);
+
+  return true;
+}
+
+static uint16_t crc16WithInitValue( const uint8_t* bytes, size_t length, uint16_t crc ) {
+    for( size_t i = 0; i < length; i++ ) {
+        crc ^= ( uint16_t )( bytes[i] << 8 );
+        for( uint8_t bit = 0; bit < 8; bit++ )
+            crc = ( uint16_t )( ( crc & 0x8000 ) ? ( crc << 1 ) ^ 0x1021 : ( crc << 1 ) );
+    }
+
+    return crc;
+}
+
+uint16_t CC_UserCode_ChecksumReport_handler()
+{
+  if ( !CHECKSUM_SUPPORTED )
+    return 0;
+
+  SUserCode userCodeData[USER_ID_MAX];
+
+  Ecode_t errCode = nvm3_readData(pFileSystemApplication, ZAF_FILE_ID_USERCODE, userCodeData, ZAF_FILE_SIZE_USERCODE);
+  ASSERT(ECODE_NVM3_OK == errCode);
+
+  uint16_t result = 0x1D0F;
+  bool found = false;
+
+  for ( uint16_t id = 1; id <= USER_ID_MAX; ++id )
+  {
+      if (userCodeData[id - 1].user_id_status != USER_ID_AVAILBLE)
+      {
+          found = true;
+          result = crc16WithInitValue((const uint8_t*)&id, 2, result);
+          result = crc16WithInitValue(&userCodeData[id - 1].user_id_status, 1, result);
+          result = crc16WithInitValue(userCodeData[id - 1].userCode, userCodeData[id - 1].userCodeLen, result);
+      }
+  }
+
+  return found ? result : 0;
+}
+
+bool isUserCodeValid(const uint8_t* code, uint8_t length, bool allowEmptyCode)
+{
+  if (length == 0 && allowEmptyCode)
+    return true;
+
+  if (length < USERCODE_MIN_LEN || length > USERCODE_MAX_LEN)
+    return false;
+
+  for (uint8_t i = 0; i < length; ++i)
+  {
+    if (strchr(SUPPORTED_KEYS, (char)code[i]) == NULL)
+      return false;
+  }
+
+  return true;
+}
 
 static inline void BoltLock(cc_door_lock_data_t * pDoorLock)
 {
@@ -1923,7 +2210,7 @@ ZCB_SupervisionTimerCallback(SSwTimer *pTimer)
 void DefaultApplicationsSettings(void)
 {
   uint8_t i;
-  uint8_t defaultUserCode[] = DEFAULT_USERCODE;
+  const uint8_t defaultUserCode[] = DEFAULT_USERCODE;
   SUserCode userCodeDefaultData[USER_ID_MAX];
 
   DPRINT("\r\nDefaultApplicationsSettings\r\n");
@@ -1949,14 +2236,24 @@ void DefaultApplicationsSettings(void)
     for (i = 1; i < USER_ID_MAX; i++)
     {
       userCodeDefaultData[i].user_id_status = USER_ID_AVAILBLE;
-      userCodeDefaultData[i].userCodeLen = sizeof(defaultUserCode);
-      memset(userCodeDefaultData[i].userCode, 0xFF, userCodeDefaultData[i].userCodeLen);
+      userCodeDefaultData[i].userCodeLen = 0;
+      memset(userCodeDefaultData[i].userCode, 0, userCodeDefaultData[i].userCodeLen);
     }
   }
 
   Ecode_t errCode = nvm3_writeData(pFileSystemApplication, ZAF_FILE_ID_USERCODE, userCodeDefaultData, ZAF_FILE_SIZE_USERCODE);
   ASSERT(ECODE_NVM3_OK == errCode); //Assert has been kept for debugging , can be removed from production code if this error can only be caused by some internal flash failure
 
+  SUserCodeInfo userCodeInfo;
+  memset(&userCodeInfo, 0, sizeof(userCodeInfo));
+
+  const uint8_t defaultMasterCode[] = DEFAULT_MASTERCODE;
+  userCodeInfo.masterCodeLength = sizeof(defaultMasterCode);
+  memcpy(userCodeInfo.masterCode, defaultMasterCode, userCodeInfo.masterCodeLength);
+  userCodeInfo.keyPadMode = DEFAULT_KEYPAD_MODE;
+
+  errCode = nvm3_writeData(pFileSystemApplication, ZAF_FILE_ID_USERCODE_INFO, &userCodeInfo, sizeof(userCodeInfo));
+  ASSERT(ECODE_NVM3_OK == errCode);
 }
 
 /**

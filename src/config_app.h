@@ -82,7 +82,7 @@
 /**
  * Max number of user Code ID's and USER CODES
  */
-#define USER_ID_MAX 1
+#define USER_ID_MAX 8
 
 //@ [DEFAULT_USERCODE_ID]
 /**
@@ -91,16 +91,42 @@
 #define DEFAULT_USERCODE {'1', '2', '3', '4'}
 //@ [DEFAULT_USERCODE_ID]
 
+#define DEFAULT_MASTERCODE {'1', '1', '1', '1'}
+
+#define DEFAULT_KEYPAD_MODE KEYPAD_MODE_NORMAL
+
 /**
  * Max notifications types
  */
 #define MAX_NOTIFICATIONS 1
 
+#define MASTER_CODE_SUPPORTED true
+#define MASTER_CODE_DEACTIVATION_SUPPORTED true
+#define CHECKSUM_SUPPORTED true
+#define MULTIPLE_REPORT_SUPPORTED true
+#define MULTIPLE_SET_SUPPORTED true
+
+#define SUPPORTED_KEYS "0123456789"
+#define SUPPORTED_STATUSES {            \
+            (1 << USER_ID_AVAILBLE) |   \
+            (1 << USER_ID_OCCUPIED) |   \
+            (1 << USER_ID_RESERVED) |   \
+            (1 << USER_ID_MESSAGING) |  \
+            (1 << USER_ID_PASSAGE_MODE) \
+        };
+
+#define SUPPORTED_KEYPAD_MODES {          \
+            (1 << KEYPAD_MODE_NORMAL) |   \
+            (1 << KEYPAD_MODE_VACATION) | \
+            (1 << KEYPAD_MODE_PRIVACY) |  \
+            (1 << KEYPAD_MODE_LOCK_OUT)   \
+        };
+
 /**
  * Security keys
  */
 //@ [REQUESTED_SECURITY_KEYS_ID]
-#define REQUESTED_SECURITY_KEYS ( SECURITY_KEY_S0_BIT | SECURITY_KEY_S2_ACCESS_BIT)
+#define REQUESTED_SECURITY_KEYS SECURITY_KEY_NONE //( SECURITY_KEY_S2_UNAUTHENTICATED | SECURITY_KEY_S0_BIT | SECURITY_KEY_S2_ACCESS_BIT)
 //@ [REQUESTED_SECURITY_KEYS_ID]
 
 /**
@@ -110,7 +136,7 @@
  * the compiler by command line or in the Studio project.
  */
 #ifndef APP_FREQ
-#define APP_FREQ REGION_DEFAULT
+#define APP_FREQ REGION_US
 #endif
 
 #endif /* _CONFIG_APP_H_ */

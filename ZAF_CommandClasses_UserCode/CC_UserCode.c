@@ -78,20 +78,12 @@ CC_UserCode_handler(
       }
       else
       {
-        CC_UserCode_getId_handler(
-            pCmd->ZW_UserCodeGetFrame.userIdentifier,
-            (user_id_status_t*)&(pTxBuf->ZW_UserCodeReport1byteFrame.userIdStatus),
-            rxOpt->destNode.endpoint);
-
-        if(false == CC_UserCode_Report_handler(
+        CC_UserCode_Report_handler(
             pCmd->ZW_UserCodeGetFrame.userIdentifier,
             &(pTxBuf->ZW_UserCodeReport1byteFrame.userCode1),
             &len,
-            rxOpt->destNode.endpoint))
-        {
-          /*Job failed */
-          return RECEIVED_FRAME_STATUS_FAIL; /*failing*/
-        }
+            &(pTxBuf->ZW_UserCodeReport1byteFrame.userIdStatus),
+            rxOpt->destNode.endpoint);
       }
 
       if(EQUEUENOTIFYING_STATUS_SUCCESS != Transport_SendResponseEP(
@@ -108,51 +100,18 @@ CC_UserCode_handler(
 
     case USER_CODE_SET:
       {
-        bool status = true;
         uint16_t i;
         uint8_t user_code_length = cmdLength - 4;
 
-        if (!((pCmd->ZW_UserCodeSet1byteFrame.userIdentifier <= CC_UserCode_UsersNumberReport_handler(rxOpt->destNode.endpoint)) &&
-            ((USERCODE_MIN_LEN <= user_code_length) && (USERCODE_MAX_LEN >= user_code_length)))
-          )
+        if (pCmd->ZW_UserCodeSet1byteFrame.userIdStatus == USER_ID_AVAILBLE)
         {
-          return RECEIVED_FRAME_STATUS_FAIL;
+            user_code_length = 0;
         }
 
-        switch (pCmd->ZW_UserCodeSet1byteFrame.userIdStatus)
-        {
-          case USER_ID_AVAILBLE:
-            for (i = 0; i < 4; i++)
-            {
-              *(&pCmd->ZW_UserCodeSet1byteFrame.userCode1 + i) = 0x00;
-            }
-            user_code_length = 4;
-            break;
-
-          case USER_ID_OCCUPIED:
-          case USER_ID_RESERVED:
-            // Validate user code are digits
-            for(i = 0; i < user_code_length; i++)
-            {
-              if( ((0x30 > (uint8_t)*(&pCmd->ZW_UserCodeSet1byteFrame.userCode1 + i)) || (0x39 < (uint8_t)*(&pCmd->ZW_UserCodeSet1byteFrame.userCode1 + i))))
-              {
-                status = false;
-                break;
-              }
-            }
-            break;
-
-          default:
-            return RECEIVED_FRAME_STATUS_FAIL;
-            break;
-        }
-
-        if (true == status)
-        {
           e_cmd_handler_return_code_t return_code;
           if (0 == pCmd->ZW_UserCodeSet1byteFrame.userIdentifier)
           {
-            uint8_t max_users = CC_UserCode_UsersNumberReport_handler(rxOpt->destNode.endpoint);
+            uint16_t max_users = CC_UserCode_UsersNumberReport_handler();
             for (i = 1; i <= max_users; i++)
             {
               return_code = CC_UserCode_Set_handler(i,
@@ -161,7 +120,7 @@ CC_UserCode_handler(
                                                     user_code_length,
                                                     rxOpt->destNode.endpoint);
 
-              if (E_CMD_HANDLER_RETURN_CODE_FAIL == return_code || E_CMD_HANDLER_RETURN_CODE_HANDLED == return_code)
+              if (false/*E_CMD_HANDLER_RETURN_CODE_FAIL == return_code || E_CMD_HANDLER_RETURN_CODE_HANDLED == return_code*/)
               {
                 // Build up new CC data structure
                 memset(&userCodeData, 0, sizeof(s_CC_userCode_data_t));
@@ -191,7 +150,7 @@ CC_UserCode_handler(
                                                   user_code_length,
                                                   rxOpt->destNode.endpoint);
 
-            if (E_CMD_HANDLER_RETURN_CODE_FAIL == return_code || E_CMD_HANDLER_RETURN_CODE_HANDLED == return_code)
+            if (false /*E_CMD_HANDLER_RETURN_CODE_FAIL == return_code || E_CMD_HANDLER_RETURN_CODE_HANDLED == return_code*/)
             {
               // Build up new CC data structure
               memset(&userCodeData, 0, sizeof(s_CC_userCode_data_t));
@@ -211,7 +170,6 @@ CC_UserCode_handler(
               return RECEIVED_FRAME_STATUS_SUCCESS;
             }
           }
-        }
         return RECEIVED_FRAME_STATUS_FAIL;
       }
       break;
@@ -219,18 +177,20 @@ CC_UserCode_handler(
     case USERS_NUMBER_GET:
       if(false == Check_not_legal_response_job(rxOpt))
       {
-    	memset((uint8_t*)pTxBuf, 0, sizeof(ZW_APPLICATION_TX_BUFFER) );
+    	  memset((uint8_t*)pTxBuf, 0, sizeof(ZW_APPLICATION_TX_BUFFER) );
 
         TRANSMIT_OPTIONS_TYPE_SINGLE_EX *pTxOptionsEx;
         RxToTxOptions(rxOpt, &pTxOptionsEx);
-        pTxBuf->ZW_UsersNumberReportFrame.cmdClass = COMMAND_CLASS_USER_CODE;
-        pTxBuf->ZW_UsersNumberReportFrame.cmd = USERS_NUMBER_REPORT;
-        pTxBuf->ZW_UsersNumberReportFrame.supportedUsers =
-          CC_UserCode_UsersNumberReport_handler( rxOpt->destNode.endpoint );
+        pTxBuf->ZW_UsersNumberReportV2Frame.cmdClass = COMMAND_CLASS_USER_CODE;
+        pTxBuf->ZW_UsersNumberReportV2Frame.cmd = USERS_NUMBER_REPORT;
+        const uint16_t supportedUsers = CC_UserCode_UsersNumberReport_handler( rxOpt->destNode.endpoint );
+        pTxBuf->ZW_UsersNumberReportV2Frame.supportedUsers = supportedUsers > 0xFF ? 0xFF : (uint8_t)supportedUsers;
+        pTxBuf->ZW_UsersNumberReportV2Frame.extendedSupportedUsers1 = supportedUsers >> 8;
+        pTxBuf->ZW_UsersNumberReportV2Frame.extendedSupportedUsers2 = supportedUsers & 0xFF;
 
         if(EQUEUENOTIFYING_STATUS_SUCCESS != Transport_SendResponseEP(
                       (uint8_t *)pTxBuf,
-                      sizeof(ZW_USERS_NUMBER_REPORT_FRAME),
+                      sizeof(ZW_USERS_NUMBER_REPORT_V2_FRAME),
                       pTxOptionsEx,
                       NULL))
         {
@@ -241,9 +201,208 @@ CC_UserCode_handler(
       }
       return RECEIVED_FRAME_STATUS_FAIL;
       break;
+
+    case USER_CODE_CAPABILITIES_GET_V2:
+      if(false == Check_not_legal_response_job(rxOpt))
+      {
+        memset((uint8_t*)pTxBuf, 0, sizeof(ZW_APPLICATION_TX_BUFFER) );
+
+        TRANSMIT_OPTIONS_TYPE_SINGLE_EX *pTxOptionsEx;
+        RxToTxOptions(rxOpt, &pTxOptionsEx);
+
+        const uint8_t supportedStatusesBitmask[] = SUPPORTED_STATUSES;
+        const uint8_t keypadModesBitmask[] = SUPPORTED_KEYPAD_MODES;
+
+        uint8_t keysBitmaskLength = 0;
+        uint8_t keysBitmask[128 / 8];
+        memset(keysBitmask, 0, sizeof(keysBitmask));
+        for (const char* s = SUPPORTED_KEYS; *s; ++s)
+        {
+            if (*s > 0)
+            {
+                const uint8_t byte = *s / 8;
+                const uint8_t bit = *s % 8;
+                keysBitmask[byte] |= 1 << bit;
+                if (byte > keysBitmaskLength)
+                  keysBitmaskLength = byte;
+            }
+        }
+
+        uint8_t* buf = (uint8_t*)pTxBuf;
+        buf[0] = COMMAND_CLASS_USER_CODE;
+        buf[1] = USER_CODE_CAPABILITIES_REPORT_V2;
+        buf += 2;
+        {
+          buf[0] = ( ( MASTER_CODE_SUPPORTED ? 1 : 0 ) << 7 ) |
+                   ( ( MASTER_CODE_DEACTIVATION_SUPPORTED ? 1 : 0 ) << 6 ) |
+                   sizeof(supportedStatusesBitmask);
+          memcpy(buf + 1, &supportedStatusesBitmask, sizeof(supportedStatusesBitmask));
+          buf += 1 + sizeof(supportedStatusesBitmask);
+
+          buf[0] = ((CHECKSUM_SUPPORTED ? 1 : 0) << 7) |
+                   ((MULTIPLE_REPORT_SUPPORTED ? 1 : 0) << 6) |
+                   ((MULTIPLE_SET_SUPPORTED ? 1 : 0) << 5) |
+                   keysBitmaskLength;
+          memcpy(buf + 1, &keypadModesBitmask, keysBitmaskLength);
+          buf += 1 + keysBitmaskLength;
+
+          buf[0] = sizeof(keysBitmask);
+          memcpy(buf + 1, &keysBitmask, sizeof(keysBitmask));
+          buf += 1 + sizeof(keysBitmask);
+        }
+
+        if(EQUEUENOTIFYING_STATUS_SUCCESS != Transport_SendResponseEP(
+                      (uint8_t *)pTxBuf,
+                      buf - (uint8_t *)pTxBuf,
+                      pTxOptionsEx,
+                      NULL))
+        {
+          /*Job failed */
+          return RECEIVED_FRAME_STATUS_FAIL;
+        }
+        return RECEIVED_FRAME_STATUS_SUCCESS;
+      }
+      return RECEIVED_FRAME_STATUS_FAIL;
+      break;
+
+    case USER_CODE_KEYPAD_MODE_GET_V2:
+      if(false == Check_not_legal_response_job(rxOpt))
+      {
+        memset((uint8_t*)pTxBuf, 0, sizeof(ZW_APPLICATION_TX_BUFFER) );
+
+        TRANSMIT_OPTIONS_TYPE_SINGLE_EX *pTxOptionsEx;
+        RxToTxOptions(rxOpt, &pTxOptionsEx);
+        pTxBuf->ZW_UserCodeKeypadModeReportV2Frame.cmdClass = COMMAND_CLASS_USER_CODE;
+        pTxBuf->ZW_UserCodeKeypadModeReportV2Frame.cmd = USER_CODE_KEYPAD_MODE_REPORT_V2;
+        pTxBuf->ZW_UserCodeKeypadModeReportV2Frame.keypadMode = CC_UserCode_KeypadModeReport_handler();
+
+        if(EQUEUENOTIFYING_STATUS_SUCCESS != Transport_SendResponseEP(
+                      (uint8_t *)pTxBuf,
+                      sizeof(ZW_USER_CODE_KEYPAD_MODE_REPORT_V2_FRAME),
+                      pTxOptionsEx,
+                      NULL))
+        {
+          /*Job failed */
+          return RECEIVED_FRAME_STATUS_FAIL;
+        }
+        return RECEIVED_FRAME_STATUS_SUCCESS;
+      }
+      return RECEIVED_FRAME_STATUS_FAIL;
+      break;
+
+    case USER_CODE_KEYPAD_MODE_SET_V2:
+      {
+        CC_UserCode_KeypadModeSet_handler(pCmd->ZW_UserCodeKeypadModeSetV2Frame.keypadMode);
+        return RECEIVED_FRAME_STATUS_SUCCESS;
+      }
+      break;
+
+    case MASTER_CODE_GET_V2:
+      if(false == Check_not_legal_response_job(rxOpt))
+      {
+        memset((uint8_t*)pTxBuf, 0, sizeof(ZW_APPLICATION_TX_BUFFER) );
+
+        TRANSMIT_OPTIONS_TYPE_SINGLE_EX *pTxOptionsEx;
+        RxToTxOptions(rxOpt, &pTxOptionsEx);
+        pTxBuf->ZW_MasterCodeReport1byteV2Frame.cmdClass = COMMAND_CLASS_USER_CODE;
+        pTxBuf->ZW_MasterCodeReport1byteV2Frame.cmd = MASTER_CODE_REPORT_V2;
+
+        uint8_t len = 0;
+        CC_UserCode_MasterCodeReport_handler(&pTxBuf->ZW_MasterCodeReport1byteV2Frame.masterCode1, &len);
+
+        pTxBuf->ZW_MasterCodeReport1byteV2Frame.properties1 = len;
+        if(EQUEUENOTIFYING_STATUS_SUCCESS != Transport_SendResponseEP(
+                      (uint8_t *)pTxBuf,
+                      3 + len,
+                      pTxOptionsEx,
+                      NULL))
+        {
+          /*Job failed */
+          return RECEIVED_FRAME_STATUS_FAIL;
+        }
+        return RECEIVED_FRAME_STATUS_SUCCESS;
+      }
+      return RECEIVED_FRAME_STATUS_FAIL;
+      break;
+
+    case MASTER_CODE_SET_V2:
+      {
+        CC_UserCode_MasterCodeSet_handler(&pCmd->ZW_MasterCodeSet1byteV2Frame.masterCode1, pCmd->ZW_MasterCodeSet1byteV2Frame.properties1 & 0x0F);
+        return RECEIVED_FRAME_STATUS_SUCCESS;
+      }
+      break;
+
+    case USER_CODE_CHECKSUM_GET_V2:
+      if(false == Check_not_legal_response_job(rxOpt))
+      {
+        memset((uint8_t*)pTxBuf, 0, sizeof(ZW_APPLICATION_TX_BUFFER) );
+
+        TRANSMIT_OPTIONS_TYPE_SINGLE_EX *pTxOptionsEx;
+        RxToTxOptions(rxOpt, &pTxOptionsEx);
+        pTxBuf->ZW_UserCodeChecksumReportV2Frame.cmdClass = COMMAND_CLASS_USER_CODE;
+        pTxBuf->ZW_UserCodeChecksumReportV2Frame.cmd = USER_CODE_CHECKSUM_REPORT_V2;
+
+        const uint16_t checksum = CC_UserCode_ChecksumReport_handler();
+
+        pTxBuf->ZW_UserCodeChecksumReportV2Frame.userCodeChecksum1 = checksum >> 8;
+        pTxBuf->ZW_UserCodeChecksumReportV2Frame.userCodeChecksum2 = checksum & 0xFF;
+
+        if(EQUEUENOTIFYING_STATUS_SUCCESS != Transport_SendResponseEP(
+                      (uint8_t *)pTxBuf,
+                      sizeof(ZW_USER_CODE_CHECKSUM_REPORT_V2_FRAME),
+                      pTxOptionsEx,
+                      NULL))
+        {
+          /*Job failed */
+          return RECEIVED_FRAME_STATUS_FAIL;
+        }
+        return RECEIVED_FRAME_STATUS_SUCCESS;
+      }
+      return RECEIVED_FRAME_STATUS_FAIL;
+      break;
+
+    case EXTENDED_USER_CODE_GET_V2:
+      if(false == Check_not_legal_response_job(rxOpt))
+      {
+        memset((uint8_t*)pTxBuf, 0, sizeof(ZW_APPLICATION_TX_BUFFER) );
+
+        TRANSMIT_OPTIONS_TYPE_SINGLE_EX *pTxOptionsEx;
+        RxToTxOptions(rxOpt, &pTxOptionsEx);
+
+        const uint16_t userId = (pCmd->ZW_ExtendedUserCodeGetV2Frame.userIdentifier1 << 8) | pCmd->ZW_ExtendedUserCodeGetV2Frame.userIdentifier2;
+        const bool reportMore = pCmd->ZW_ExtendedUserCodeGetV2Frame.properties1 & 1;
+
+        uint8_t* buf = (uint8_t*)pTxBuf;
+
+        uint16_t dataLen = 0;
+
+        buf[0] = COMMAND_CLASS_USER_CODE;
+        buf[1] = EXTENDED_USER_CODE_REPORT_V2;
+
+        CC_UserCode_ExtendedReport_handler(userId, buf + 2, &dataLen, 30, reportMore);
+
+        if(EQUEUENOTIFYING_STATUS_SUCCESS != Transport_SendResponseEP(
+                      (uint8_t *)pTxBuf,
+                      dataLen + 2,
+                      pTxOptionsEx,
+                      NULL))
+        {
+          /*Job failed */
+          return RECEIVED_FRAME_STATUS_FAIL;
+        }
+        return RECEIVED_FRAME_STATUS_SUCCESS;
+      }
+      return RECEIVED_FRAME_STATUS_FAIL;
+      break;
+
+    case EXTENDED_USER_CODE_SET_V2:
+      CC_UserCode_ExtendedSet_handler(((uint8_t*)pCmd) + 2, cmdLength - 2);
+      return RECEIVED_FRAME_STATUS_SUCCESS;
+      break;
   }
   return RECEIVED_FRAME_STATUS_NO_SUPPORT;
 }
+
 
 JOB_STATUS CC_UserCode_SupportReport(
   AGI_PROFILE* pProfile,
@@ -259,7 +418,7 @@ JOB_STATUS CC_UserCode_SupportReport(
 
   if ((0 == userIdentifier) || IS_NULL(pUserCode) ||
       (userCodeLen > USERCODE_MAX_LEN) || (userCodeLen < USERCODE_MIN_LEN) ||
-      (2 < userIdStatus))
+      (5 < userIdStatus))
   {
     return JOB_STATUS_BUSY;
   }
@@ -298,15 +457,11 @@ void CC_UserCode_report_stx(
   pTxBuf->ZW_UserCodeReport1byteFrame.cmd = USER_CODE_REPORT;
   pTxBuf->ZW_UserCodeReport1byteFrame.userIdentifier = pData->userIdentifier;
 
-  CC_UserCode_getId_handler(
-      pData->userIdentifier,
-      (user_id_status_t*)&(pTxBuf->ZW_UserCodeReport1byteFrame.userIdStatus),
-      pData->rxOptions.destNode.endpoint);
-
   if(false == CC_UserCode_Report_handler(
       pData->userIdentifier,
       &(pTxBuf->ZW_UserCodeReport1byteFrame.userCode1),
       &len,
+      &(pTxBuf->ZW_UserCodeReport1byteFrame.userIdStatus),
       pData->rxOptions.destNode.endpoint))
   {
     /*Job failed */
@@ -324,4 +479,4 @@ void CC_UserCode_report_stx(
   }
 }
 
-REGISTER_CC(COMMAND_CLASS_USER_CODE, USER_CODE_VERSION, CC_UserCode_handler);
+REGISTER_CC(COMMAND_CLASS_USER_CODE, USER_CODE_VERSION_V2, CC_UserCode_handler);
