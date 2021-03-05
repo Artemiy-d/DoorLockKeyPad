@@ -63,7 +63,6 @@ CC_UserCode_handler(
       memset((uint8_t*)pTxBuf, 0, sizeof(ZW_APPLICATION_TX_BUFFER) );
 
       uint8_t len = 0;
-      uint8_t maxNumberOfUsers = CC_UserCode_UsersNumberReport_handler(rxOpt->destNode.endpoint);
       TRANSMIT_OPTIONS_TYPE_SINGLE_EX *pTxOptionsEx;
       RxToTxOptions(rxOpt, &pTxOptionsEx);
 
@@ -71,20 +70,12 @@ CC_UserCode_handler(
       pTxBuf->ZW_UserCodeReport1byteFrame.cmd = USER_CODE_REPORT;
       pTxBuf->ZW_UserCodeReport1byteFrame.userIdentifier = pCmd->ZW_UserCodeGetFrame.userIdentifier;
 
-      if((0 == pCmd->ZW_UserCodeGetFrame.userIdentifier)
-         || (pCmd->ZW_UserCodeGetFrame.userIdentifier > maxNumberOfUsers))
-      {
-        pTxBuf->ZW_UserCodeReport1byteFrame.userIdStatus = USER_ID_NO_STATUS;
-      }
-      else
-      {
-        CC_UserCode_Report_handler(
-            pCmd->ZW_UserCodeGetFrame.userIdentifier,
-            &(pTxBuf->ZW_UserCodeReport1byteFrame.userCode1),
-            &len,
-            &(pTxBuf->ZW_UserCodeReport1byteFrame.userIdStatus),
-            rxOpt->destNode.endpoint);
-      }
+      CC_UserCode_Report_handler(
+          pCmd->ZW_UserCodeGetFrame.userIdentifier,
+          &(pTxBuf->ZW_UserCodeReport1byteFrame.userCode1),
+          &len,
+          &(pTxBuf->ZW_UserCodeReport1byteFrame.userIdStatus),
+          rxOpt->destNode.endpoint);
 
       if(EQUEUENOTIFYING_STATUS_SUCCESS != Transport_SendResponseEP(
                   (uint8_t *)pTxBuf,
@@ -100,76 +91,17 @@ CC_UserCode_handler(
 
     case USER_CODE_SET:
       {
-        uint16_t i;
-        uint8_t user_code_length = cmdLength - 4;
+        e_cmd_handler_return_code_t return_code = CC_UserCode_Set_handler(pCmd->ZW_UserCodeSet1byteFrame.userIdentifier,
+                                              pCmd->ZW_UserCodeSet1byteFrame.userIdStatus,
+                                              &(pCmd->ZW_UserCodeSet1byteFrame.userCode1),
+                                              cmdLength - 4,
+                                              rxOpt->destNode.endpoint);
 
-        if (pCmd->ZW_UserCodeSet1byteFrame.userIdStatus == USER_ID_AVAILBLE)
+        if (E_CMD_HANDLER_RETURN_CODE_HANDLED == return_code)
         {
-            user_code_length = 0;
+          return RECEIVED_FRAME_STATUS_SUCCESS;
         }
 
-          e_cmd_handler_return_code_t return_code;
-          if (0 == pCmd->ZW_UserCodeSet1byteFrame.userIdentifier)
-          {
-            uint16_t max_users = CC_UserCode_UsersNumberReport_handler();
-            for (i = 1; i <= max_users; i++)
-            {
-              return_code = CC_UserCode_Set_handler(i,
-                                                    pCmd->ZW_UserCodeSet1byteFrame.userIdStatus,
-                                                    &(pCmd->ZW_UserCodeSet1byteFrame.userCode1),
-                                                    user_code_length,
-                                                    rxOpt->destNode.endpoint);
-
-              if (false/*E_CMD_HANDLER_RETURN_CODE_FAIL == return_code || E_CMD_HANDLER_RETURN_CODE_HANDLED == return_code*/)
-              {
-                // Build up new CC data structure
-                memset(&userCodeData, 0, sizeof(s_CC_userCode_data_t));
-                userCodeData.rxOptions = *rxOpt;
-                userCodeData.userIdentifier = pCmd->ZW_UserCodeGetFrame.userIdentifier;
-                /* We cannot know if the same User Identifier was modified several times
-                or not, so do not overwrite_previous_trigger. Also we want to know if a
-                User Code was updated, even for a very short time */
-                if (false == ZAF_TSE_Trigger((void *)CC_UserCode_report_stx, &userCodeData, false))
-                {
-                  DPRINTF("%s(): ZAF_TSE_Trigger failed\n", __func__);
-                }
-              }
-
-              if (E_CMD_HANDLER_RETURN_CODE_FAIL == return_code)
-              {
-                return RECEIVED_FRAME_STATUS_FAIL;
-              }
-            }
-            return RECEIVED_FRAME_STATUS_SUCCESS;
-          }
-          else
-          {
-            return_code = CC_UserCode_Set_handler(pCmd->ZW_UserCodeSet1byteFrame.userIdentifier,
-                                                  pCmd->ZW_UserCodeSet1byteFrame.userIdStatus,
-                                                  &(pCmd->ZW_UserCodeSet1byteFrame.userCode1),
-                                                  user_code_length,
-                                                  rxOpt->destNode.endpoint);
-
-            if (false /*E_CMD_HANDLER_RETURN_CODE_FAIL == return_code || E_CMD_HANDLER_RETURN_CODE_HANDLED == return_code*/)
-            {
-              // Build up new CC data structure
-              memset(&userCodeData, 0, sizeof(s_CC_userCode_data_t));
-              userCodeData.rxOptions = *rxOpt;
-              userCodeData.userIdentifier = pCmd->ZW_UserCodeGetFrame.userIdentifier;
-              /* We cannot know if the same User Identifier was modified several times
-                or not, so do not overwrite_previous_trigger. Also we want to know if a
-                User Code was updated, even for a very short time */
-              if (false == ZAF_TSE_Trigger((void *)CC_UserCode_report_stx, &userCodeData, false))
-              {
-                DPRINTF("%s(): ZAF_TSE_Trigger failed\n", __func__);
-              }
-            }
-
-            if (E_CMD_HANDLER_RETURN_CODE_HANDLED == return_code)
-            {
-              return RECEIVED_FRAME_STATUS_SUCCESS;
-            }
-          }
         return RECEIVED_FRAME_STATUS_FAIL;
       }
       break;

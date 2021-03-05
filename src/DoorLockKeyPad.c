@@ -1552,6 +1552,11 @@ CC_UserCode_Set_handler(
       return E_CMD_HANDLER_RETURN_CODE_HANDLED;
   }
 
+  if (identifier > USER_ID_MAX)
+  {
+      DPRINTF("Invalid user id\r\n", identifier);
+      return E_CMD_HANDLER_RETURN_CODE_HANDLED;
+  }
 
   UNUSED(endpoint);
   SUserCode userCodeData[USER_ID_MAX];
@@ -1628,15 +1633,24 @@ CC_UserCode_Report_handler(
   uint8_t* status,
   uint8_t endpoint)
 {
-  SUserCode userCodeData[USER_ID_MAX];
-  UNUSED(endpoint);
+  if (identifier && identifier <= USER_ID_MAX)
+  {
+    SUserCode userCodeData[USER_ID_MAX];
+    UNUSED(endpoint);
 
-  Ecode_t errCode = nvm3_readData(pFileSystemApplication, ZAF_FILE_ID_USERCODE, userCodeData, ZAF_FILE_SIZE_USERCODE);
-  ASSERT(ECODE_NVM3_OK == errCode); //Assert has been kept for debugging , Read is difficult to fail when a write has a failure can be removed from production code if this error can only be caused by some internal flash failure
+    Ecode_t errCode = nvm3_readData(pFileSystemApplication, ZAF_FILE_ID_USERCODE, userCodeData, ZAF_FILE_SIZE_USERCODE);
+    ASSERT(ECODE_NVM3_OK == errCode); //Assert has been kept for debugging , Read is difficult to fail when a write has a failure can be removed from production code if this error can only be caused by some internal flash failure
 
-  *pLen = userCodeData[identifier - 1].userCodeLen;
-  *status = userCodeData[identifier - 1].user_id_status;
-  memcpy(pUserCode, userCodeData[identifier - 1].userCode, *pLen);
+    *pLen = userCodeData[identifier - 1].userCodeLen;
+    *status = userCodeData[identifier - 1].user_id_status;
+    memcpy(pUserCode, userCodeData[identifier - 1].userCode, *pLen);
+  }
+  else
+  {
+      *pLen = USERCODE_MIN_LEN;
+      *status = USER_ID_NO_STATUS;
+      memset(pUserCode, 0, USERCODE_MIN_LEN);
+  }
 
   printUserCode("UC report", identifier, *status, pUserCode, *pLen);
 
@@ -1753,6 +1767,10 @@ CC_UserCode_ExtendedSet_handler(
               DPRINT("Invalid status for setting all codes\r\n");
           }
       }
+      else if (id > USER_ID_MAX)
+      {
+          DPRINTF("Invalid user id %d\r\n", id);
+      }
       else if ( (supportedStatuses[0] & ( 1 << status )) == 0 )
       {
           DPRINTF("Not supported status %d\r\n", status);
@@ -1807,39 +1825,62 @@ bool CC_UserCode_ExtendedReport_handler(
   uint16_t firstId = id;
   uint16_t nextId = 0;
 
-  for (; id <= USER_ID_MAX; ++id) {
-      if (id != firstId && userCodeData[id - 1].user_id_status == 0) {
-          continue;
-      }
+  if (id && id <= USER_ID_MAX)
+  {
+    for (; id <= USER_ID_MAX; ++id)
+    {
+        if (id != firstId && userCodeData[id - 1].user_id_status == USER_ID_AVAILBLE)
+        {
+            continue;
+        }
 
-      const uint8_t len = userCodeData[id - 1].user_id_status ? (userCodeData[id - 1].userCodeLen & 0xFF) : 0;
+        const uint8_t len = userCodeData[id - 1].user_id_status ? (userCodeData[id - 1].userCodeLen & 0xFF) : 0;
 
-      if (*userCodesCount == maxUserCodesCount) {
-          nextId = id;
-          break;
-      }
+        if (*userCodesCount == maxUserCodesCount)
+        {
+            nextId = id;
+            break;
+        }
 
-      if (userCodesData + len + 4 - userCodesCount > maxDataLen)
-      {
-          ASSERT(id != firstId);
+        if (userCodesData + len + 4 - userCodesCount > maxDataLen)
+        {
+            ASSERT(id != firstId);
 
-          DPRINT("CC_UserCode_ExtendedReport_handler max length exceeded\r\n");
-          nextId = id;
-          break;
-      }
+            DPRINT("CC_UserCode_ExtendedReport_handler max length exceeded\r\n");
+            nextId = id;
+            break;
+        }
 
+        userCodesData[0] = (id >> 8) & 0xFF;
+        userCodesData[1] = id & 0xFF;
+        userCodesData[2] = userCodeData[id - 1].user_id_status;
+        userCodesData[3] = len;
+
+        memcpy(userCodesData + 4, userCodeData[id - 1].userCode, len);
+
+        printUserCode("extended report user code", id, userCodeData[id - 1].user_id_status, userCodeData[id - 1].userCode, userCodeData[id - 1].userCodeLen);
+
+        userCodesData += len + 4;
+        ++*userCodesCount;
+    }
+  }
+  else
+  {
       userCodesData[0] = (id >> 8) & 0xFF;
       userCodesData[1] = id & 0xFF;
-      userCodesData[2] = userCodeData[id - 1].user_id_status;
+      userCodesData[2] = USER_ID_NO_STATUS;
+      userCodesData[3] = 0;
 
-      userCodesData[3] = len;
+      userCodesData += 4;
 
-      memcpy(userCodesData + 4, userCodeData[id - 1].userCode, len);
-
-      printUserCode("extended report user code", id, userCodeData[id - 1].user_id_status, userCodeData[id - 1].userCode, userCodeData[id - 1].userCodeLen);
-
-      userCodesData += len + 4;
-      ++*userCodesCount;
+      for (; id <= USER_ID_MAX; ++id)
+      {
+          if (userCodeData[id - 1].user_id_status != USER_ID_AVAILBLE)
+          {
+              nextId = id;
+              break;
+          }
+      }
   }
 
   userCodesData[0] = nextId >> 8;
