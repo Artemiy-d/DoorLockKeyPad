@@ -223,8 +223,8 @@ CC_UserCode_handler(
                 const uint8_t byte = *s / 8;
                 const uint8_t bit = *s % 8;
                 keysBitmask[byte] |= 1 << bit;
-                if (byte > keysBitmaskLength)
-                  keysBitmaskLength = byte;
+                if (byte >= keysBitmaskLength)
+                  keysBitmaskLength = byte + 1;
             }
         }
 
@@ -242,13 +242,13 @@ CC_UserCode_handler(
           buf[0] = ((CHECKSUM_SUPPORTED ? 1 : 0) << 7) |
                    ((MULTIPLE_REPORT_SUPPORTED ? 1 : 0) << 6) |
                    ((MULTIPLE_SET_SUPPORTED ? 1 : 0) << 5) |
-                   keysBitmaskLength;
-          memcpy(buf + 1, &keypadModesBitmask, keysBitmaskLength);
-          buf += 1 + keysBitmaskLength;
+                   sizeof(keypadModesBitmask);
+          memcpy(buf + 1, &keypadModesBitmask, sizeof(keypadModesBitmask));
+          buf += 1 + sizeof(keypadModesBitmask);
 
-          buf[0] = sizeof(keysBitmask);
-          memcpy(buf + 1, &keysBitmask, sizeof(keysBitmask));
-          buf += 1 + sizeof(keysBitmask);
+          buf[0] = keysBitmaskLength;
+          memcpy(buf + 1, &keysBitmask, keysBitmaskLength);
+          buf += 1 + keysBitmaskLength;
         }
 
         if(EQUEUENOTIFYING_STATUS_SUCCESS != Transport_SendResponseEP(
