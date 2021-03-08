@@ -138,9 +138,9 @@ extern e_cmd_handler_return_code_t
 CC_UserCode_Set_handler(
   uint8_t identifier,
   USER_ID_STATUS id,
-  uint8_t* pUserCode,
+  const uint8_t* pUserCode,
   uint8_t len,
-  uint8_t endpoint );
+  bool* allCodesRemoved );
 
 /**
  * @brief The User Code Get ID.

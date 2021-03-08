@@ -91,15 +91,35 @@ CC_UserCode_handler(
 
     case USER_CODE_SET:
       {
+        bool allUserCodesRemoved = false;
         e_cmd_handler_return_code_t return_code = CC_UserCode_Set_handler(pCmd->ZW_UserCodeSet1byteFrame.userIdentifier,
                                               pCmd->ZW_UserCodeSet1byteFrame.userIdStatus,
                                               &(pCmd->ZW_UserCodeSet1byteFrame.userCode1),
                                               cmdLength - 4,
-                                              rxOpt->destNode.endpoint);
+                                              &allUserCodesRemoved);
 
         if (E_CMD_HANDLER_RETURN_CODE_HANDLED == return_code)
         {
-          return RECEIVED_FRAME_STATUS_SUCCESS;
+            if (allUserCodesRemoved)
+            {
+                memset((uint8_t*)pTxBuf, 0, sizeof(ZW_APPLICATION_TX_BUFFER) );
+
+                TRANSMIT_OPTIONS_TYPE_SINGLE_EX *pTxOptionsEx;
+                RxToTxOptions(rxOpt, &pTxOptionsEx);
+
+                pTxBuf->ZW_UserCodeReport1byteFrame.cmdClass = COMMAND_CLASS_USER_CODE;
+                pTxBuf->ZW_UserCodeReport1byteFrame.cmd = USER_CODE_REPORT;
+                pTxBuf->ZW_UserCodeReport1byteFrame.userIdentifier = 0;
+                pTxBuf->ZW_UserCodeReport1byteFrame.userIdStatus = USER_ID_AVAILBLE;
+
+                Transport_SendResponseEP(
+                                 (uint8_t *)pTxBuf,
+                                 sizeof(ZW_USER_CODE_REPORT_1BYTE_FRAME) - 1,
+                                 pTxOptionsEx,
+                                 NULL);
+            }
+
+            return RECEIVED_FRAME_STATUS_SUCCESS;
         }
 
         return RECEIVED_FRAME_STATUS_FAIL;
@@ -311,7 +331,7 @@ CC_UserCode_handler(
         buf[0] = COMMAND_CLASS_USER_CODE;
         buf[1] = EXTENDED_USER_CODE_REPORT_V2;
 
-        CC_UserCode_ExtendedReport_handler(userId, buf + 2, &dataLen, 30, reportMore);
+        CC_UserCode_ExtendedReport_handler(userId, buf + 2, &dataLen, 33, reportMore);
 
         if(EQUEUENOTIFYING_STATUS_SUCCESS != Transport_SendResponseEP(
                       (uint8_t *)pTxBuf,

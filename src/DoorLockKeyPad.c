@@ -1535,10 +1535,13 @@ e_cmd_handler_return_code_t
 CC_UserCode_Set_handler(
   uint8_t identifier,
   USER_ID_STATUS status,
-  uint8_t* pUserCode,
+  const uint8_t* pUserCode,
   uint8_t len,
-  uint8_t endpoint )
+  bool* allCodesRemoved )
 {
+  if (allCodesRemoved)
+    *allCodesRemoved = false;
+
   const uint8_t supportedStatuses[] = SUPPORTED_STATUSES;
   if ( (supportedStatuses[0] & ( 1 << status )) == 0 )
   {
@@ -1558,7 +1561,6 @@ CC_UserCode_Set_handler(
       return E_CMD_HANDLER_RETURN_CODE_HANDLED;
   }
 
-  UNUSED(endpoint);
   SUserCode userCodeData[USER_ID_MAX];
 
   Ecode_t errCode = nvm3_readData(pFileSystemApplication, ZAF_FILE_ID_USERCODE, userCodeData, ZAF_FILE_SIZE_USERCODE);
@@ -1574,6 +1576,9 @@ CC_UserCode_Set_handler(
         memset(userCodeData[i].userCode, 0, USERCODE_MAX_LEN);
         userCodeData[i].userCodeLen = 0;
       }
+
+      if (allCodesRemoved)
+        *allCodesRemoved = true;
     }
   }
   else
@@ -1818,7 +1823,7 @@ bool CC_UserCode_ExtendedReport_handler(
   uint8_t* userCodesCount = userCodesData;
   *userCodesCount = 0;
 
-  const uint8_t maxUserCodesCount = reportMore ? 3 : 1;
+  const uint8_t maxUserCodesCount = reportMore ? 5 : 1;
 
   ++userCodesData;
 
