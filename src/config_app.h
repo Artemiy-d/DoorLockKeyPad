@@ -82,15 +82,8 @@
 /**
  * Max number of user Code ID's and USER CODES
  */
-#define USER_ID_MAX 8
-
-//@ [DEFAULT_USERCODE_ID]
-/**
- * Door lock key pad default user code
- */
+#define USER_ID_MAX 20
 #define DEFAULT_USERCODE {'1', '2', '3', '4'}
-//@ [DEFAULT_USERCODE_ID]
-
 #define DEFAULT_MASTERCODE {'1', '1', '1', '1'}
 
 #define DEFAULT_KEYPAD_MODE KEYPAD_MODE_NORMAL
