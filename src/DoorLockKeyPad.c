@@ -91,9 +91,12 @@
 #define LATCH_STATUS_LED     APP_LED_A
 #define BOLT_STATUS_LED      APP_LED_B
 
+#define DOOR_BUTTON   APP_BUTTON_B
+
 /* Ensure we did not allocate the same physical button or led to more than one function */
 STATIC_ASSERT((APP_BUTTON_LEARN_RESET != DOORHANDLE_BTN) &&
               (APP_BUTTON_LEARN_RESET != BATTERY_REPORT_BTN) &&
+              (APP_BUTTON_LEARN_RESET != DOOR_BUTTON) &&
               (APP_BUTTON_LEARN_RESET != ENTER_USER_CODE) &&
               (DOORHANDLE_BTN != BATTERY_REPORT_BTN) &&
               (DOORHANDLE_BTN != ENTER_USER_CODE) &&
@@ -127,7 +130,16 @@ STATE_APP;
 #define DOOR_LOCK_OPERATION_SET_TIMEOUT_NOT_SUPPORTED 0xFE
 
 #define APP_SUPPORTED_OUTSIDE_HANDLES DOOR_HANDLE_1
-#define APP_SUPPORTED_INSIDE_HANDLES  0
+#define APP_SUPPORTED_INSIDE_HANDLES  DOOR_HANDLE_1 | DOOR_HANDLE_3 | DOOR_HANDLE_4
+
+#define SUPPORTED_DOOR_COMPONENTS DOOR_COMPONENT_LATCH | DOOR_COMPONENT_BOLT | DOOR_COMPONENT_DOOR
+
+#define AUTO_RELOCK_SUPPORTED 1
+#define HOLD_AND_RELEASE_SUPPORTED 1
+#define TWIST_ASSIST_SUPPORTED 1
+#define BLOCK_TO_BLOCK_SUPPORTED 1
+
+#define SUPPORTED_DOOR_MODES { DOOR_MODE_UNSEC, DOOR_MODE_SECURED, DOOR_MODE_UNSEC_TIMEOUT, DOOR_MODE_UNSEC_INSIDE, DOOR_MODE_UNSEC_OUTSIDE }
 
 /** 8-bit mask. Bit 0: Twist assist, bit 1: Block to block, others reserved */
 #define APP_SUPPORTED_OPTIONS_FLAGS 0x00
@@ -686,7 +698,7 @@ ZW_APPLICATION_STATUS ApplicationInit(EResetReason_t eResetReason)
           RadioConfig.eRegion);
   DPRINT("-----------------------------------\n");
   DPRINTF("%s: Hold/release: Activate/deactivate outside door handle #1\n", Board_GetButtonLabel(DOORHANDLE_BTN));
-  DPRINTF("%s: Send battery report\n", Board_GetButtonLabel(BATTERY_REPORT_BTN));
+  DPRINTF("%s: door button\n", Board_GetButtonLabel(DOOR_BUTTON));
   DPRINTF("%s: Toggle learn mode\n", Board_GetButtonLabel(APP_BUTTON_LEARN_RESET));
   DPRINTF("      Hold 5 sec: Reset\n");
   DPRINTF("%s: Enter user code\n", Board_GetButtonLabel(ENTER_USER_CODE));
@@ -700,7 +712,7 @@ ZW_APPLICATION_STATUS ApplicationInit(EResetReason_t eResetReason)
   CC_ZWavePlusInfo_Init(&CCZWavePlusInfo);
 
   memset((uint8_t *)&myDoorLock, 0x00, sizeof(myDoorLock));
-  myDoorLock.type = DOOR_OPERATION_CONST;
+  myDoorLock.configuration.type = DOOR_OPERATION_CONST;
 
   CC_Version_SetApplicationVersionInfo(ZAF_GetAppVersionMajor(),
                                        ZAF_GetAppVersionMinor(),
@@ -769,7 +781,7 @@ ApplicationTask(SApplicationHandles* pAppHandles)
   // Enables button events on test board
   Board_EnableButton(APP_BUTTON_LEARN_RESET);
   Board_EnableButton(DOORHANDLE_BTN);
-  Board_EnableButton(BATTERY_REPORT_BTN);
+  Board_EnableButton(DOOR_BUTTON);
   Board_EnableButton(ENTER_USER_CODE);
 
   Board_IndicatorInit(APP_LED_INDICATOR);
@@ -961,20 +973,6 @@ AppStateManager(EVENT_APP event)
         ChangeState(STATE_APP_LEARN_MODE);
       }
 
-      if (BTN_EVENT_SHORT_PRESS(BATTERY_REPORT_BTN) == (BUTTON_EVENT)event)
-      {
-        DPRINT("\r\nBattery Level report transmit (keypress trig)\r\n");
-        ChangeState(STATE_APP_TRANSMIT_DATA);
-
-        if (false == ZAF_EventHelperEventEnqueue(EVENT_APP_NEXT_EVENT_JOB))
-        {
-          DPRINT("\r\n** EVENT_APP_NEXT_EVENT_JOB fail\r\n");
-        }
-
-        /*Add event's on job-queue*/
-        ZAF_JobHelperJobEnqueue(EVENT_APP_SEND_BATTERY_LEVEL_REPORT);
-      }
-
       if (EVENT_APP_PERIODIC_BATTERY_CHECK_TRIGGER == event)
       {
         /* Check the battery level and send a report to lifeline if required */
@@ -1051,6 +1049,31 @@ AppStateManager(EVENT_APP event)
         void* pData = CC_Doorlock_prepare_zaf_tse_data(&zaf_tse_local_actuation);
         ZAF_TSE_Trigger((void*)CC_DoorLock_operation_report_stx, pData, true);
       }
+
+
+
+      if (BTN_EVENT_HOLD(DOOR_BUTTON) == (BUTTON_EVENT)event)
+      {
+        myDoorLock.condition &= ~0x01;
+
+        UpdateDoorLockCondition_RefreshMMI();
+        SaveStatus();
+        /* Update the lifeline destinations when the door status has changed */
+        void* pData = CC_Doorlock_prepare_zaf_tse_data(&zaf_tse_local_actuation);
+        ZAF_TSE_Trigger((void*)CC_DoorLock_operation_report_stx, pData, true);
+      }
+      else if ( (BTN_EVENT_UP(DOOR_BUTTON) == (BUTTON_EVENT)event) ||
+                (BTN_EVENT_LONG_PRESS(DOOR_BUTTON) == (BUTTON_EVENT)event) ) {
+          myDoorLock.condition |= 0x01;
+
+          UpdateDoorLockCondition_RefreshMMI();
+          SaveStatus();
+          /* Update the lifeline destinations when the door status has changed */
+          void* pData = CC_Doorlock_prepare_zaf_tse_data(&zaf_tse_local_actuation);
+          ZAF_TSE_Trigger((void*)CC_DoorLock_operation_report_stx, pData, true);
+      }
+
+
       break;
 
     case STATE_APP_LEARN_MODE:
@@ -1382,8 +1405,8 @@ LoadConfiguration(void)
   ApplicationFileSystemInit(&pFileSystemApplication);
 
   myDoorLock.condition = 0; /* read HW-condition for the door: [door] Open/close,[bolt] Locked/unlocked,[Latch] Open/Closed */
-  myDoorLock.insideDoorHandleMode |= APP_SUPPORTED_INSIDE_HANDLES;    /* enable all supported inside handles */
-  myDoorLock.outsideDoorHandleMode |= APP_SUPPORTED_OUTSIDE_HANDLES;  /* enable all supported outside handles */
+  myDoorLock.configuration.insideDoorHandleMode |= APP_SUPPORTED_INSIDE_HANDLES;    /* enable all supported inside handles */
+  myDoorLock.configuration.outsideDoorHandleMode |= APP_SUPPORTED_OUTSIDE_HANDLES;  /* enable all supported outside handles */
 
   uint32_t appVersion;
   Ecode_t versionFileStatus = nvm3_readData(pFileSystemApplication, ZAF_FILE_ID_APP_VERSION, &appVersion, ZAF_FILE_SIZE_APP_VERSION);
@@ -1400,16 +1423,7 @@ LoadConfiguration(void)
     Ecode_t errCode = nvm3_readData(pFileSystemApplication, FILE_ID_APPLICATIONDATA, &savedDoorLock, FILE_SIZE_APPLICATIONDATA);
     ASSERT(ECODE_NVM3_OK == errCode);    //Assert has been kept for debugging , can be removed from production code if this error can only be caused by some internal flash failure
 
-    myDoorLock.condition = savedDoorLock.condition;
-    myDoorLock.type = savedDoorLock.type;
-    myDoorLock.insideDoorHandleMode = savedDoorLock.insideDoorHandleMode;
-    myDoorLock.outsideDoorHandleMode = savedDoorLock.outsideDoorHandleMode;
-    /* NB: Door handle states (insideDoorHandleState and outsideDoorHandleState)
-     * are not really part of the configuration. For that reason we do not
-     * set them here even though they are part of the saved config data.
-     */
-    myDoorLock.lockTimeoutMin = savedDoorLock.lockTimeoutMin;
-    myDoorLock.lockTimeoutSec = savedDoorLock.lockTimeoutSec;
+    myDoorLock = savedDoorLock;
 
     BatteryData = readBatteryData();
 
@@ -1992,6 +2006,23 @@ e_cmd_handler_return_code_t CC_DoorLock_OperationSet_handler(door_lock_mode_t mo
 {
   DPRINTF("\r\nCC Door Lock Operation Set - mode: %#02x\r\n", (uint8_t)mode);
 
+  const uint8_t supportedDoorModes[] = SUPPORTED_DOOR_MODES;
+
+  bool hasMode = false;
+
+  for ( size_t i = 0; i < sizeof( supportedDoorModes ); ++i ) {
+      if ( supportedDoorModes[i] == mode ) {
+          hasMode = true;
+          break;
+      }
+  }
+
+  if (!hasMode) {
+      DPRINTF("%s(): Mode %#02x not supported, failing \r\n", __func__, mode);
+      //Receive mode not supported or it's a reserved value
+      return E_CMD_HANDLER_RETURN_CODE_FAIL;
+  }
+
   if (getCurrentMode() == mode)
   {
     //Nothing to do, return success
@@ -2003,24 +2034,16 @@ e_cmd_handler_return_code_t CC_DoorLock_OperationSet_handler(door_lock_mode_t mo
   {
     DPRINTF("%s(): Switch to Secured mode %#02x\r\n", __func__, mode);
     BoltLock(&myDoorLock);
-
-    UpdateDoorLockCondition_RefreshMMI();
-    SaveStatus();
-  }
-  else if (DOOR_MODE_UNSEC == mode)
-  {
-    DPRINTF("%s(): Switch to Unsecured mode %#02x\r\n", __func__, mode);
-    BoltUnlock(&myDoorLock);
-
-    UpdateDoorLockCondition_RefreshMMI();
-    SaveStatus();
   }
   else
   {
-    DPRINTF("%s(): Mode %#02x not supported, failing \r\n", __func__, mode);
-    //Receive mode not supported or it's a reserved value
-    return E_CMD_HANDLER_RETURN_CODE_FAIL;
+    DPRINTF("%s(): Switch to Unsecured mode %#02x\r\n", __func__, mode);
+    BoltUnlock(&myDoorLock);
   }
+
+  UpdateDoorLockCondition_RefreshMMI();
+  SaveStatus();
+
   return E_CMD_HANDLER_RETURN_CODE_WORKING;
 }
 
@@ -2033,8 +2056,8 @@ void CC_DoorLock_OperationGet_handler(cc_door_lock_operation_report_t* pData)
 
   pData->mode = getCurrentMode();
   // Inside- and Outside Door Handle Mode must always report 0 if the current lock mode == SECURED
-  pData->insideDoorHandleMode = pData->mode == DOOR_MODE_SECURED ? 0 : myDoorLock.insideDoorHandleMode;
-  pData->outsideDoorHandleMode = pData->mode == DOOR_MODE_SECURED ? 0 : myDoorLock.outsideDoorHandleMode;
+  pData->insideDoorHandleMode = pData->mode == DOOR_MODE_SECURED ? 0 : myDoorLock.configuration.insideDoorHandleMode;
+  pData->outsideDoorHandleMode = pData->mode == DOOR_MODE_SECURED ? 0 : myDoorLock.configuration.outsideDoorHandleMode;
   pData->condition = myDoorLock.condition;
   pData->lockTimeoutMin = DOOR_LOCK_OPERATION_SET_TIMEOUT_NOT_SUPPORTED;
   pData->lockTimeoutSec = DOOR_LOCK_OPERATION_SET_TIMEOUT_NOT_SUPPORTED;
@@ -2056,23 +2079,15 @@ e_cmd_handler_return_code_t CC_DoorLock_ConfigurationSet_handler(cc_door_lock_co
 {
   DPRINT("Door Lock Configuration Set\n");
 
-  if ((DOOR_OPERATION_CONST == pData->type) &&
-      !(~APP_SUPPORTED_INSIDE_HANDLES & pData->insideDoorHandleMode) && // Fail if non-supported inside handles are set
-      !(~APP_SUPPORTED_OUTSIDE_HANDLES & pData->outsideDoorHandleMode) &&  // Fail if non-supported outside handles are set
-      !(APP_MAX_AUTORELOCKTIME < ((pData->autoRelockTime1 << 8) + pData->autoRelockTime2)) && // Fail if non-supported auto-relock time
-      !(APP_MAX_HOLDANDRELEASETIME < ((pData->holdAndReleaseTime1 << 8) + pData->holdAndReleaseTime2)) && // Fail if non-supported hold and release time
-      !(~APP_SUPPORTED_OPTIONS_FLAGS & pData->reservedOptionsFlags )  // Fail if non-supported options flags
-     )
-  {
-    myDoorLock.insideDoorHandleMode  = pData->insideDoorHandleMode;
-    myDoorLock.outsideDoorHandleMode = pData->outsideDoorHandleMode;
+  myDoorLock.configuration = *pData;
 
-    UpdateDoorLockCondition_RefreshMMI();
+  myDoorLock.configuration.insideDoorHandleMode &= APP_SUPPORTED_INSIDE_HANDLES;
+  myDoorLock.configuration.outsideDoorHandleMode &= APP_SUPPORTED_OUTSIDE_HANDLES;
 
-    SaveStatus();
-    return E_CMD_HANDLER_RETURN_CODE_HANDLED;
-  }
-  return E_CMD_HANDLER_RETURN_CODE_FAIL;
+  UpdateDoorLockCondition_RefreshMMI();
+
+  SaveStatus();
+  return E_CMD_HANDLER_RETURN_CODE_HANDLED;
 }
 
 
@@ -2084,18 +2099,7 @@ CC_DoorLock_ConfigurationGet_handler(cc_door_lock_configuration_t* pData)
 {
   DPRINT("Door Lock Configuration Get\n");
 
-  memset(pData, 0, sizeof(*pData));
-
-  pData->type = myDoorLock.type;
-  pData->insideDoorHandleMode = myDoorLock.insideDoorHandleMode;
-  pData->outsideDoorHandleMode = myDoorLock.outsideDoorHandleMode;
-  pData->lockTimeoutMin = DOOR_LOCK_OPERATION_SET_TIMEOUT_NOT_SUPPORTED;
-  pData->lockTimeoutSec = DOOR_LOCK_OPERATION_SET_TIMEOUT_NOT_SUPPORTED;
-  pData->autoRelockTime1 = 0;
-  pData->autoRelockTime2 = 0;
-  pData->holdAndReleaseTime1 = 0;
-  pData->holdAndReleaseTime2 = 0;
-  pData->reservedOptionsFlags = 0;
+  *pData = myDoorLock.configuration;
 }
 
 /**
@@ -2106,17 +2110,21 @@ void CC_DoorLock_CapabilitiesGet_handler(cc_door_lock_capabilities_report_t* pDa
 
   pData->reserved = 0; // Reserved fields must be set to zero.
   pData->lengthSupportedOperationType = 0x01;
-  pData->supportedOperationTypeBitmask = 1 << DOOR_OPERATION_CONST;
-  pData->lengthSupportedDoorLockModeList = 2;
-  pData->supportedDoorLockModeList[0] = DOOR_MODE_UNSEC;
-  pData->supportedDoorLockModeList[1] =  DOOR_MODE_SECURED;
+  pData->supportedOperationTypeBitmask = (1 << DOOR_OPERATION_CONST) | ( 1 << DOOR_OPERATION_TIMED );
+
+  const uint8_t supportedDoorModes[] = SUPPORTED_DOOR_MODES;
+
+  pData->lengthSupportedDoorLockModeList = sizeof( supportedDoorModes );
+  memcpy(pData->supportedDoorLockModeList, supportedDoorModes, pData->lengthSupportedDoorLockModeList);
+
   pData->supportedOutsideHandleModes = APP_SUPPORTED_OUTSIDE_HANDLES;
   pData->supportedInsideHandleModes = APP_SUPPORTED_INSIDE_HANDLES;
-  pData->supportedDoorComponents = DOOR_COMPONENT_LATCH | DOOR_COMPONENT_BOLT;
-  pData->autoRelockSupport = 0;
-  pData->holdAndReleaseSupport = 0;
-  pData->twistAssistSupport = 0;
-  pData->blockToBlockSupport = 0;
+  pData->supportedDoorComponents = SUPPORTED_DOOR_COMPONENTS;
+
+  pData->autoRelockSupport = AUTO_RELOCK_SUPPORTED;
+  pData->holdAndReleaseSupport = HOLD_AND_RELEASE_SUPPORTED;
+  pData->twistAssistSupport = TWIST_ASSIST_SUPPORTED;
+  pData->blockToBlockSupport = BLOCK_TO_BLOCK_SUPPORTED;
 
 }
 
@@ -2135,7 +2143,7 @@ UpdateDoorLockCondition_RefreshMMI( void )
    * Mode bit 0 value == 1  --> handle #1 can open the door
    * State bit 0 value == 1 --> handle #1 is activated
    */
-  if((myDoorLock.outsideDoorHandleMode & 0x01) && (myDoorLock.outsideDoorHandleState & 0x01))
+  if((myDoorLock.configuration.outsideDoorHandleMode & 0x01) && (myDoorLock.outsideDoorHandleState & 0x01))
   {
     myDoorLock.condition &=  0xFB;   /* Latch open --> Clear latch bit (condition bit #2) */
   }
@@ -2283,13 +2291,11 @@ void DefaultApplicationsSettings(void)
 
   /* Its alive */
   memset(&myDoorLock, 0x00, sizeof(myDoorLock));
-  myDoorLock.type = DOOR_OPERATION_CONST;
-  myDoorLock.insideDoorHandleMode  = APP_SUPPORTED_INSIDE_HANDLES;  /* all supported inside handles enabled */
-  myDoorLock.outsideDoorHandleMode = APP_SUPPORTED_OUTSIDE_HANDLES;  /* all supported outside handles enabled */
-  myDoorLock.lockTimeoutMin = DOOR_LOCK_OPERATION_SET_TIMEOUT_NOT_SUPPORTED;
-  myDoorLock.lockTimeoutSec = DOOR_LOCK_OPERATION_SET_TIMEOUT_NOT_SUPPORTED;
-  myDoorLock.outsideDoorHandleState = 0; /* Handles not being pressed */
-  myDoorLock.insideDoorHandleState = 0; /* Handles not being pressed */
+  myDoorLock.configuration.type = DOOR_OPERATION_CONST;
+  myDoorLock.configuration.insideDoorHandleMode  = APP_SUPPORTED_INSIDE_HANDLES;  /* all supported inside handles enabled */
+  myDoorLock.configuration.outsideDoorHandleMode = APP_SUPPORTED_OUTSIDE_HANDLES;  /* all supported outside handles enabled */
+  myDoorLock.configuration.lockTimeoutMin = 0;
+  myDoorLock.configuration.lockTimeoutSec = 10;
   myDoorLock.condition = 0x02; /*Set bolt unsecured by default. (must clear reserved bits 7..3) */
 
 
