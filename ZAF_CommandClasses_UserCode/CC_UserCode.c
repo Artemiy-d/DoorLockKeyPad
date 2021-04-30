@@ -8,7 +8,6 @@
 /*                              INCLUDE FILES                               */
 /****************************************************************************/
 #include <ZW_TransportLayer.h>
-
 #include "config_app.h"
 #include <CC_UserCode.h>
 #include <string.h>

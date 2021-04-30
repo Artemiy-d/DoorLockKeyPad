@@ -32,6 +32,7 @@
 #define ZAF_FILE_ID_CC_FIRMWARE_UPDATE  (ZAF_FILE_ID_BASE + 5)
 #define ZAF_FILE_ID_USERCODE            (ZAF_FILE_ID_BASE + 6)
 #define ZAF_FILE_ID_USERCODE_INFO       (ZAF_FILE_ID_BASE + 7)
+#define ZAF_FILE_ID_ANTI_THEFT          (ZAF_FILE_ID_BASE + 8)
 
 #define ZAF_FILE_SIZE_APP_VERSION  (sizeof(uint32_t))
 

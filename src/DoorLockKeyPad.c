@@ -65,6 +65,7 @@
 #include <CC_Supervision.h>
 #include <CC_FirmwareUpdate.h>
 #include <CC_ManufacturerSpecific.h>
+#include "../ZAF_CommandClasses_AntiTheft/CC_AntiTheft.h"
 
 #include <string.h>
 
@@ -162,6 +163,7 @@ static uint8_t cmdClassListNonSecureNotIncluded[] =
   COMMAND_CLASS_SUPERVISION,
 
 #if REQUESTED_SECURITY_KEYS == 0
+  COMMAND_CLASS_ANTITHEFT,
   COMMAND_CLASS_VERSION,
   COMMAND_CLASS_MANUFACTURER_SPECIFIC,
   COMMAND_CLASS_DEVICE_RESET_LOCALLY,
@@ -202,6 +204,7 @@ static uint8_t cmdClassListSecure[] =
 #if REQUESTED_SECURITY_KEYS != 0
   COMMAND_CLASS_VERSION,
   COMMAND_CLASS_MANUFACTURER_SPECIFIC,
+  COMMAND_CLASS_ANTITHEFT,
   COMMAND_CLASS_DEVICE_RESET_LOCALLY,
   COMMAND_CLASS_INDICATOR,
   COMMAND_CLASS_POWERLEVEL,
@@ -214,6 +217,16 @@ static uint8_t cmdClassListSecure[] =
   COMMAND_CLASS_FIRMWARE_UPDATE_MD_V5
 #endif
 };
+
+static uint8_t getAntiTheftCcSizeList(const uint8_t* cc_list, uint8_t fullSize) {
+  for ( uint8_t i = 0; i < fullSize; ++i ) {
+      if ( cc_list[i] == COMMAND_CLASS_ANTITHEFT ) {
+          return i + 1;
+      }
+  }
+
+  return fullSize;
+}
 
 
 /**
@@ -233,7 +246,7 @@ app_node_information_t m_AppNIF =
 */
 static const uint8_t SecureKeysRequested = REQUESTED_SECURITY_KEYS;
 
-static const SAppNodeInfo_t AppNodeInfo =
+static SAppNodeInfo_t AppNodeInfo =
 {
   .DeviceOptionsMask = DEVICE_OPTIONS_MASK,
   .NodeType.generic = GENERIC_TYPE,
@@ -246,6 +259,8 @@ static const SAppNodeInfo_t AppNodeInfo =
   .CommandClasses.SecureIncludedSecureCC.pCommandClasses = cmdClassListSecure
 };
 
+
+
 static const SRadioConfig_t RadioConfig =
 {
   .iListenBeforeTalkThreshold = ELISTENBEFORETALKTRESHOLD_DEFAULT,
@@ -255,12 +270,55 @@ static const SRadioConfig_t RadioConfig =
   .eRegion = APP_FREQ
 };
 
-static const SProtocolConfig_t ProtocolConfig = {
+static SProtocolConfig_t ProtocolConfig = {
   .pVirtualSlaveNodeInfoTable = NULL,
   .pSecureKeysRequested = &SecureKeysRequested,
   .pNodeInfo = &AppNodeInfo,
   .pRadioConfig = &RadioConfig
 };
+
+static void updateNodeInfoImpl() {
+  SAntiTheftInfo info;
+
+  if ( getAntiTheftInfo(&info) && info.locked && info.restricted ) {
+      AppNodeInfo.CommandClasses.UnSecureIncludedCC.iListLength = getAntiTheftCcSizeList( AppNodeInfo.CommandClasses.UnSecureIncludedCC.pCommandClasses,
+                                                                              sizeof_array(cmdClassListNonSecureNotIncluded) );
+      AppNodeInfo.CommandClasses.SecureIncludedUnSecureCC.iListLength = getAntiTheftCcSizeList( AppNodeInfo.CommandClasses.SecureIncludedUnSecureCC.pCommandClasses,
+                                                                              sizeof_array(cmdClassListNonSecureIncludedSecure) );
+      AppNodeInfo.CommandClasses.SecureIncludedSecureCC.iListLength = getAntiTheftCcSizeList( AppNodeInfo.CommandClasses.SecureIncludedSecureCC.pCommandClasses,
+                                                                              sizeof_array(cmdClassListSecure) );
+
+      m_AppNIF.cmdClassListNonSecureCount = getAntiTheftCcSizeList( m_AppNIF.cmdClassListNonSecure,
+                                                                    sizeof(cmdClassListNonSecureNotIncluded) );
+
+      m_AppNIF.cmdClassListNonSecureIncludedSecureCount = getAntiTheftCcSizeList( m_AppNIF.cmdClassListNonSecureIncludedSecure,
+                                                                                  sizeof(cmdClassListNonSecureIncludedSecure) );
+      m_AppNIF.cmdClassListSecureCount = getAntiTheftCcSizeList( m_AppNIF.cmdClassListSecure,
+                                                                 sizeof(cmdClassListSecure) );
+
+  }
+  else {
+      AppNodeInfo.CommandClasses.UnSecureIncludedCC.iListLength = sizeof_array(cmdClassListNonSecureNotIncluded);
+      AppNodeInfo.CommandClasses.SecureIncludedUnSecureCC.iListLength =  sizeof_array(cmdClassListNonSecureIncludedSecure) ;
+      AppNodeInfo.CommandClasses.SecureIncludedSecureCC.iListLength = sizeof_array(cmdClassListSecure) ;
+
+      m_AppNIF.cmdClassListNonSecureCount = sizeof(cmdClassListNonSecureNotIncluded);
+
+      m_AppNIF.cmdClassListNonSecureIncludedSecureCount = sizeof(cmdClassListNonSecureIncludedSecure );
+      m_AppNIF.cmdClassListSecureCount = sizeof(cmdClassListSecure);
+  }
+
+
+
+}
+
+
+void updateNodeInfo() {
+  updateNodeInfoImpl();
+
+  SetupActiveNIF();
+  ZAF_setAppProtocolConfig(&ProtocolConfig);
+}
 
 
 /**
@@ -549,7 +607,9 @@ static void EventHandlerZwCommandStatus(void)
                       (SECURITY_KEY_NONE != GetHighestSecureLevel(ZAF_GetSecurityKeys())) )
           {
             SetDefaultConfiguration();
+            updateNodeInfo();
           }
+
           ZAF_EventHelperEventEnqueue((EVENT_APP) EVENT_SYSTEM_LEARNMODE_FINISHED);
           ZAF_Transport_OnLearnCompleted();
         }
@@ -711,8 +771,8 @@ ZW_APPLICATION_STATUS ApplicationInit(EResetReason_t eResetReason)
 
   CC_ZWavePlusInfo_Init(&CCZWavePlusInfo);
 
-  memset((uint8_t *)&myDoorLock, 0x00, sizeof(myDoorLock));
-  myDoorLock.configuration.type = DOOR_OPERATION_CONST;
+  updateNodeInfoImpl();
+
 
   CC_Version_SetApplicationVersionInfo(ZAF_GetAppVersionMajor(),
                                        ZAF_GetAppVersionMinor(),
@@ -733,6 +793,8 @@ ZW_APPLICATION_STATUS ApplicationInit(EResetReason_t eResetReason)
    * ZW_UserTask_CreateTask() can be used to create additional tasks.
    * @see SensorPIR_MultiThread example for more info.
    *************************************************************************************/
+
+
   bool bWasTaskCreated = ZW_ApplicationRegisterTask(
                                                     ApplicationTask,
                                                     EAPPLICATIONEVENT_ZWRX,
@@ -751,6 +813,7 @@ ZW_APPLICATION_STATUS ApplicationInit(EResetReason_t eResetReason)
 static void
 ApplicationTask(SApplicationHandles* pAppHandles)
 {
+  //ZAF_setAppProtocolConfig
   // Init
   DPRINT("Enabling watchdog\n");
   WDOGn_Enable(DEFAULT_WDOG, true);
@@ -897,6 +960,9 @@ Transport_ApplicationCommandHandlerEx(
 	case COMMAND_CLASS_FIRMWARE_UPDATE_MD_V5:
       frame_status = handleCommandClassFWUpdate(rxOpt, pCmd, cmdLength);
       break;
+	case COMMAND_CLASS_ANTITHEFT:
+	    frame_status = CC_AntiTheft_handler( rxOpt, pCmd, cmdLength );
+	    break;
   }
   return frame_status;
 }
@@ -2326,6 +2392,17 @@ void DefaultApplicationsSettings(void)
 
   errCode = nvm3_writeData(pFileSystemApplication, ZAF_FILE_ID_USERCODE_INFO, &userCodeInfo, sizeof(userCodeInfo));
   ASSERT(ECODE_NVM3_OK == errCode);
+
+
+  {
+      SAntiTheftInfo antTheftInfo;
+      memset(&antTheftInfo, 0, sizeof(antTheftInfo));
+      if (getAntiTheftInfo(&antTheftInfo) && antTheftInfo.locked) {
+          antTheftInfo.restricted = true;
+      }
+
+      setAntiTheftInfo(&antTheftInfo);
+  }
 }
 
 /**
@@ -2514,4 +2591,13 @@ void CC_ManufacturerSpecific_DeviceSpecificGet_handler(device_id_type_t * pDevic
   *(pDeviceIDData + 5) = (uint8_t)(uuID >> 16);
   *(pDeviceIDData + 6) = (uint8_t)(uuID >>  8);
   *(pDeviceIDData + 7) = (uint8_t)(uuID >>  0);
+}
+
+void setAntiTheftInfo( const SAntiTheftInfo* info ) {
+  nvm3_writeData(pFileSystemApplication, ZAF_FILE_ID_ANTI_THEFT, info, sizeof(SAntiTheftInfo));
+}
+
+bool getAntiTheftInfo( SAntiTheftInfo* info ) {
+  Ecode_t errCode = nvm3_readData(pFileSystemApplication, ZAF_FILE_ID_ANTI_THEFT, info, sizeof(SAntiTheftInfo));
+  return errCode == ECODE_NVM3_OK;
 }

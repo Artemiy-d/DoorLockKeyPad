@@ -57,7 +57,7 @@ static VOID_CALLBACKFUNC(cbUpdateStayAwakePeriod)();
 /****************************************************************************/
 
 
-static void SetupActiveNIF(void);
+
 
 uint8_t
 Transport_OnApplicationInitSW(
@@ -300,7 +300,7 @@ TransportCmdClassSupported(uint8_t commandClass,
  * @brief Sets up the active NIF.
  * @param nodeId
  */
-static void SetupActiveNIF(void)
+void SetupActiveNIF(void)
 {
   if(0 == ZAF_GetNodeID() || (SECURITY_KEY_NONE == GetHighestSecureLevel(ZAF_GetSecurityKeys())) )
   {
