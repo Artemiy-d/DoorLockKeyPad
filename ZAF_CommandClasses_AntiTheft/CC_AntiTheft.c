@@ -1,4 +1,4 @@
-#include "../ZAF_CommandClasses_AntiTheft/CC_AntiTheft.h"
+#include "CC_AntiTheft.h"
 
 #include <ZW_TransportLayer.h>
 
@@ -78,10 +78,14 @@ received_frame_status_t CC_AntiTheft_handler(
             const uint8_t codeLen = frame[2] & 0x7F;
 
             if ( codeLen == info.magicCodeLength && memcmp(info.magicCode, frame + 3, codeLen) == 0 ) {
+                const bool wasRestricted = info.restricted;
+
                 memset(&info, 0, sizeof(info));
                 setAntiTheftInfo( &info );
 
-                updateNodeInfo();
+                if ( wasRestricted ) {
+                    updateNodeInfo();
+                }
             }
         }
         else {

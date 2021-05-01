@@ -65,7 +65,7 @@
 #include <CC_Supervision.h>
 #include <CC_FirmwareUpdate.h>
 #include <CC_ManufacturerSpecific.h>
-#include "../ZAF_CommandClasses_AntiTheft/CC_AntiTheft.h"
+#include <CC_AntiTheft.h>
 
 #include <string.h>
 
