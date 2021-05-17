@@ -1673,7 +1673,7 @@ CC_UserCode_Set_handler(
     else
     {
         memcpy(userCodeData[identifier - 1].userCode, pUserCode, len);
-        memset(userCodeData[identifier - 1].userCode, 0, USERCODE_MAX_LEN - len);
+        memset(userCodeData[identifier - 1].userCode + len, 0, USERCODE_MAX_LEN - len);
         userCodeData[identifier - 1].userCodeLen = len;
     }
 
